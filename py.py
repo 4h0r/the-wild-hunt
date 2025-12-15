@@ -1,6 +1,5 @@
 import math
 import sys
-import os
 import requests
 from PIL import Image
 from tqdm import tqdm
@@ -16,33 +15,51 @@ if len(sys.argv) != 2:
 OUTPUT_JPG = sys.argv[1]
 
 # -----------------------------
-# Image metadata
+# Image metadata (source)
 # -----------------------------
 WIDTH = 56665
 HEIGHT = 39292
 TILE_SIZE = 512
 
-SCALE = 0.5  # 4× downscaled (½ width × ½ height)
+# -----------------------------
+# Scale factor
+# -----------------------------
+SCALE = 0.2   # 1/8 linear scale
 
-OUT_W = int(WIDTH * SCALE)
-OUT_H = int(HEIGHT * SCALE)
-
+# -----------------------------
+# IIIF source
+# -----------------------------
 BASE_URL = "https://ms01.nasjonalmuseet.no/iip/"
 IDENTIFIER = "/tif/NG.M.00258 GP.tif"
 
+# -----------------------------
+# Tile grid (source space)
+# -----------------------------
 tiles_x = math.ceil(WIDTH / TILE_SIZE)
 tiles_y = math.ceil(HEIGHT / TILE_SIZE)
 
-session = requests.Session()
+# -----------------------------
+# Scaled tile size (integer grid)
+# -----------------------------
+SCALED_TILE = round(TILE_SIZE * SCALE)
+
+# -----------------------------
+# Output dimensions (grid-aligned)
+# -----------------------------
+OUT_W = SCALED_TILE * tiles_x
+OUT_H = SCALED_TILE * tiles_y
+
+print(f"Creating {OUT_W} × {OUT_H} JPG (gap-free)")
 
 # -----------------------------
 # Create output image
 # -----------------------------
-print(f"Creating {OUT_W} × {OUT_H} JPG (4× downscaled)")
 img = Image.new("RGB", (OUT_W, OUT_H))
 
+session = requests.Session()
+
 # -----------------------------
-# Download, downscale, paste
+# Download → scale → paste
 # -----------------------------
 for ty in tqdm(range(tiles_y), desc="Downloading tiles"):
     for tx in range(tiles_x):
@@ -62,30 +79,38 @@ for ty in tqdm(range(tiles_y), desc="Downloading tiles"):
 
         tile = Image.open(BytesIO(r.content)).convert("RGB")
 
-        # Downscale tile
-        sw = int(w * SCALE)
-        sh = int(h * SCALE)
+        # -----------------------------
+        # Scaled tile size (edge-safe)
+        # -----------------------------
+        if w == TILE_SIZE:
+            sw = SCALED_TILE
+        else:
+            sw = OUT_W - tx * SCALED_TILE
 
-        if sw == 0 or sh == 0:
-            continue
+        if h == TILE_SIZE:
+            sh = SCALED_TILE
+        else:
+            sh = OUT_H - ty * SCALED_TILE
 
         tile = tile.resize((sw, sh), Image.LANCZOS)
 
-        # Scaled paste position
-        px = int(x * SCALE)
-        py = int(y * SCALE)
+        # -----------------------------
+        # Perfect grid-aligned paste
+        # -----------------------------
+        px = tx * SCALED_TILE
+        py = ty * SCALED_TILE
 
         img.paste(tile, (px, py))
 
 # -----------------------------
-# Save JPG (memory-safe)
+# Save JPG (robust settings)
 # -----------------------------
 img.save(
     OUTPUT_JPG,
     format="JPEG",
     quality=90,
-    subsampling=2,     # 4:2:0
-    optimize=False     # CRITICAL
+    subsampling=2,   # 4:2:0
+    optimize=False  # REQUIRED for huge images
 )
 
 print(f"Done. JPG written to {OUTPUT_JPG}")
